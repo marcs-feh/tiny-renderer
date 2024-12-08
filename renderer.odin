@@ -1,12 +1,13 @@
 package tinyren
 
 import "core:time"
+import "core:slice"
 import "core:mem"
 import "core:fmt"
 import "core:c"
 import sdl "vendor:sdl2"
 
-Color :: [4]u8
+Color :: distinct [4]u8
 
 Rect :: struct {
 	using pos: [2]i32,
@@ -22,6 +23,11 @@ Renderer :: struct {
 	width: i32,
 	height: i32,
 	clip: Clip,
+}
+
+Image :: struct {
+	using bounds: Rect,
+	pixels: []Color,
 }
 
 Renderer_Error :: enum byte {
@@ -45,8 +51,6 @@ _get_surface :: #force_inline proc "contextless" (rend: Renderer) -> ^sdl.Surfac
 	return sdl.GetWindowSurface(rend.window)
 }
 
-import "core:slice"
-
 draw_clear :: proc(rend: Renderer, color: Color){
 	surface := _get_surface(rend)
 	pixels := (transmute([^]u32)surface.pixels)[0:(surface.pitch / 4) * surface.h]
@@ -65,15 +69,23 @@ draw_rect :: proc(rend: Renderer, rect: Rect, color: Color){
 	surface := _get_surface(rend)
 	pixels := transmute([^]u32)surface.pixels
 
-	if color.a == 0xff {
-		for y in y0..<y1 {
-			for x in x0..<x1 {
-				pixels[x + (y * (surface.pitch / 4))] = transmute(u32)color
-			}
-		}
-	}
-	else {
-		unimplemented()
+	 #no_bounds_check draw: {
+		 if color.a == 0xff {
+			 for y in y0..<y1 {
+				 y_off := (y * (surface.pitch / 4))
+				 row := pixels[x0 + y_off:x1 + y_off]
+				 slice.fill(row, transmute(u32)color)
+			 }
+		 }
+		 else {
+			 for y in y0..<y1 {
+				 y_off := (y * (surface.pitch / 4))
+				 for x in x0..<x1 {
+					 blended := color_blend(transmute(Color)pixels[x + y_off], color)
+					 pixels[x + y_off] = transmute(u32)blended;
+				 }
+			 }
+		 }
 	}
 }
 
@@ -120,7 +132,7 @@ renderer_create :: proc(win: ^sdl.Window) -> (rend: Renderer, err: Renderer_Erro
 		sdl.GetWindowSize(win, &w, &h)
 		rend.width = i32(w)
 		rend.height = i32(h)
-		rend.clip = { top = 0, bottom = rend.width, left = 0, right = rend.height }
+		rend.clip = { top = 0, bottom = rend.height, left = 0, right = rend.width }
 	}
 
 	ok := ((sdl.PixelFormatEnum(surface.format.format) == .RGB888) ||
@@ -157,6 +169,17 @@ set_clip :: proc(rend: ^Renderer, rect: Rect){
 
 reset_clip :: proc(rend: ^Renderer){
 	rend.clip = { top = 0, bottom = rend.width, left = 0, right = rend.height }
+}
+
+color_blend :: proc(dst, src: Color) -> Color {
+	res := dst
+	ia := u32(0xff - src.a)
+	a  := u32(src.a)
+
+	res.r = u8(((u32(dst.r) * ia) + (u32(src.r) * a)) >> 8)
+	res.g = u8(((u32(dst.g) * ia) + (u32(src.g) * a)) >> 8)
+	res.b = u8(((u32(dst.b) * ia) + (u32(src.b) * a)) >> 8)
+	return res
 }
 
 

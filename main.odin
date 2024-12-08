@@ -9,8 +9,13 @@ import "core:fmt"
 W, H :: 800, 600
 
 @private
-rgb :: proc(r, g, b: u8) -> Color {
+rgb :: #force_inline proc "contextless"(r, g, b: u8) -> Color {
 	return {b, g, r, 0xff}
+}
+
+@private
+rgba :: #force_inline proc "contextless"(r, g, b, a: u8) -> Color {
+	return {b, g, r, a}
 }
 
 main :: proc(){
@@ -43,6 +48,8 @@ main :: proc(){
 
 	for {
 		begin := time.now()
+		draw_clear(rend, rgb(20, 20, 20))
+
 		for sdl.PollEvent(&event) {
 			#partial switch event.type {
 			case .QUIT:
@@ -58,9 +65,13 @@ main :: proc(){
 				mouse_pos = {event.motion.x, event.motion.y}
 			}
 		}
+		ra := Rect{mouse_pos - {200, 200}, 400, 400}
+		rb := Rect{{20, 20}, 220, 460}
+
+		draw_rect(rend, rb, rgb(200, 150, 150))
+		draw_rect(rend, ra, rgba(0, 240, 0, 80))
 
 		sdl.UpdateWindowSurface(window)
-		draw_clear(rend, rgb(100, 0, 0))
 		frame_elapsed := time.since(begin)
 
 		remaining := max_time_per_frame - frame_elapsed

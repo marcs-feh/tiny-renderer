@@ -18,7 +18,33 @@ rgba :: #force_inline proc "contextless"(r, g, b, a: u8) -> Color {
 	return {b, g, r, a}
 }
 
+import "core:image"
+import "core:image/png"
+
+pepis :: #load("pepis.png", []byte)
+
+test_image : Image
+
+loadimg :: proc(){
+	i, err := image.load_from_bytes(pepis)
+	assert(err == nil, "shiet")
+	// test_image = i^
+
+	test_image.w = auto_cast i.width
+	test_image.h = auto_cast i.height
+	test_image.pos = {0, 0}
+	test_image.pixels = make([]Color, i.width * i.height)
+
+	assert(i.depth == 8)
+	if !image.alpha_add_if_missing(i) {
+		panic("damn")
+	}
+
+	mem.copy_non_overlapping(raw_data(test_image.pixels), raw_data(i.pixels.buf), i.width * i.height * 4)
+}
+
 main :: proc(){
+	loadimg()
 	if sdl.Init({ .VIDEO }) < 0{
 		panic("Could not initialize SDL")
 	}
@@ -65,11 +91,13 @@ main :: proc(){
 				mouse_pos = {event.motion.x, event.motion.y}
 			}
 		}
-		ra := Rect{mouse_pos - {200, 200}, 400, 400}
-		rb := Rect{{20, 20}, 220, 460}
-
-		draw_rect(rend, rb, rgb(200, 150, 150))
-		draw_rect(rend, ra, rgba(0, 240, 0, 80))
+		// ra := Rect{mouse_pos - {200, 200}, 400, 400}
+		// rb := Rect{{20, 20}, 220, 460}
+		//
+		// draw_rect(rend, rb, rgb(200, 150, 150))
+		// draw_rect(rend, ra, rgba(0, 240, 0, 80))
+		test_image.pos = mouse_pos
+		draw_image(rend, test_image)
 
 		sdl.UpdateWindowSurface(window)
 		frame_elapsed := time.since(begin)

@@ -57,6 +57,33 @@ draw_clear :: proc(rend: Renderer, color: Color){
 	slice.fill(pixels, transmute(u32)color)
 }
 
+import "base:intrinsics"
+
+draw_image :: proc(rend: Renderer, img: Image){
+	surface := _get_surface(rend)
+	pixels := transmute([^]u32)surface.pixels
+
+	// TODO: Clip!
+
+	x0 := img.pos.x
+	y0 := img.pos.y
+	x1 := img.pos.x + img.w
+	y1 := img.pos.y + img.h
+
+	for y in y0..<y1 {
+		y_off := (y * (surface.pitch / 4))
+
+		for x in x0..<x1 {
+			px := img.pixels[(x-x0) + ((y-y0) * img.w)]
+			px = px.bgra
+			// TODO: do this swapping on image creation or loading ^
+			y_off   := (y * (surface.pitch / 4))
+			blended := color_blend(transmute(Color)pixels[x + y_off], px)
+			pixels[x + y_off] = transmute(u32)blended;
+		}
+	}
+}
+
 draw_rect :: proc(rend: Renderer, rect: Rect, color: Color){
 	if color.a == 0 { return } // Fully transparent, no need to draw
 
@@ -86,38 +113,6 @@ draw_rect :: proc(rend: Renderer, rect: Rect, color: Color){
 				 }
 			 }
 		 }
-	}
-}
-
-draw_line :: proc(rend: Renderer, x0, y0, x1, y1: i32, color: Color){
-	x0, y0 := x0, y0
-	color := transmute(u32)color
-
-	// TODO: Clipping
-
-	dx: i32 = abs(x1 - x0)
-    dy: i32 = -abs(y1 - y0)
-    sx: i32 = x0 < x1 ? 1 : -1
-    sy: i32 = y0 < y1 ? 1 : -1
-    error := dx + dy
-
-	surface := _get_surface(rend)
-	pixels := transmute([^]u32)surface.pixels
-
-	for {
-		pixels[x0 + (y0 * surface.pitch / 4)] = color
-		if x0 == x1 && y0 == y1 { break }
-
-		error2 := 2 * error
-		if error2 >= dy {
-			error += dy
-			x0 += sx
-		}
-
-		if error2 <= dx {
-			error += dx
-			y0 += sy
-		}
 	}
 }
 
@@ -181,7 +176,6 @@ color_blend :: proc(dst, src: Color) -> Color {
 	res.b = u8(((u32(dst.b) * ia) + (u32(src.b) * a)) >> 8)
 	return res
 }
-
 
 // Ensure that our odin style rect is compatible with SDl's rect
 #assert(size_of(Rect) == size_of(sdl.Rect) && align_of(Rect) == align_of(sdl.Rect))

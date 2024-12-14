@@ -1,5 +1,6 @@
 package tinyren
 
+import "base:intrinsics"
 import "core:time"
 import "core:slice"
 import "core:mem"
@@ -26,7 +27,7 @@ Renderer :: struct {
 }
 
 Image :: struct {
-	using bounds: Rect,
+	w, h: i32,
 	pixels: []Color,
 }
 
@@ -51,37 +52,59 @@ _get_surface :: #force_inline proc "contextless" (rend: Renderer) -> ^sdl.Surfac
 	return sdl.GetWindowSurface(rend.window)
 }
 
+@private
+_get_surface_pixels :: #force_inline proc "contextless" (rend: Renderer) -> []Color {
+	surf := sdl.GetWindowSurface(rend.window)
+	raw_px := transmute([^]Color)surf.pixels
+	pixels := raw_px[:surf.w * surf.h]
+	return pixels
+}
+
 draw_clear :: proc(rend: Renderer, color: Color){
 	surface := _get_surface(rend)
 	pixels := (transmute([^]u32)surface.pixels)[0:(surface.pitch / 4) * surface.h]
 	slice.fill(pixels, transmute(u32)color)
 }
 
-import "base:intrinsics"
+draw_image :: proc {
+	draw_image_sub,
+	draw_image_whole,
+}
 
-draw_image :: proc(rend: Renderer, img: Image){
-	surface := _get_surface(rend)
-	pixels := transmute([^]u32)surface.pixels
 
-	// TODO: Clip!
+draw_image_sub :: proc(rend: Renderer, img: Image, x, y: i32, sub: Rect){
+	sub, x, y := sub, x, y
 
-	x0 := img.pos.x
-	y0 := img.pos.y
-	x1 := img.pos.x + img.w
-	y1 := img.pos.y + img.h
-
-	for y in y0..<y1 {
-		y_off := (y * (surface.pitch / 4))
-
-		for x in x0..<x1 {
-			px := img.pixels[(x-x0) + ((y-y0) * img.w)]
-			px = px.bgra
-			// TODO: do this swapping on image creation or loading ^
-			y_off   := (y * (surface.pitch / 4))
-			blended := color_blend(transmute(Color)pixels[x + y_off], px)
-			pixels[x + y_off] = transmute(u32)blended;
-		}
+	pixels := _get_surface_pixels(rend)
+	clip_image: {
+		if n := rend.clip.left - x; n > 0 { sub.w -= n; sub.x += n; x += n }
+		if n := rend.clip.top - y; n > 0  { sub.h -= n; sub.y += n; y += n }
+		if n := x + sub.w - rend.clip.right; n > 0  { sub.w -= n }
+		if n := y + sub.h - rend.clip.bottom; n > 0 { sub.h -= n }
 	}
+
+	if sub.w <= 0 || sub.h <= 0 { return }
+
+	img_index := sub.x + (sub.y * img.w)
+	surf_index := x + (y * rend.width)
+
+	img_row_skip := img.w - sub.w
+	surf_row_skip := rend.width - sub.w
+
+	for _ in 0..<sub.h {
+		for _ in 0..<sub.w {
+			// #no_bounds_check \
+			pixels[surf_index] = color_blend(pixels[surf_index], img.pixels[img_index])
+			img_index += 1
+			surf_index += 1
+		}
+		img_index += img_row_skip
+		surf_index += surf_row_skip
+	}
+}
+
+draw_image_whole :: proc(rend: Renderer, img: Image, x, y: i32){
+	draw_image_sub(rend, img, x, y, Rect{ pos = {0, 0}, w = img.w, h = img.h })
 }
 
 draw_rect :: proc(rend: Renderer, rect: Rect, color: Color){

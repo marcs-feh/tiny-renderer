@@ -32,7 +32,6 @@ loadimg :: proc(){
 
 	test_image.w = auto_cast i.width
 	test_image.h = auto_cast i.height
-	test_image.pos = {0, 0}
 	test_image.pixels = make([]Color, i.width * i.height)
 
 	assert(i.depth == 8)
@@ -41,6 +40,10 @@ loadimg :: proc(){
 	}
 
 	mem.copy_non_overlapping(raw_data(test_image.pixels), raw_data(i.pixels.buf), i.width * i.height * 4)
+
+	for &px in test_image.pixels {
+		px = px.bgra
+	}
 }
 
 main :: proc(){
@@ -91,13 +94,8 @@ main :: proc(){
 				mouse_pos = {event.motion.x, event.motion.y}
 			}
 		}
-		// ra := Rect{mouse_pos - {200, 200}, 400, 400}
-		// rb := Rect{{20, 20}, 220, 460}
-		//
-		// draw_rect(rend, rb, rgb(200, 150, 150))
-		// draw_rect(rend, ra, rgba(0, 240, 0, 80))
-		test_image.pos = mouse_pos
-		draw_image(rend, test_image)
+
+		draw_image(rend, test_image, mouse_pos.x, mouse_pos.y, Rect{{30, 30}, 250, 250})
 
 		sdl.UpdateWindowSurface(window)
 		frame_elapsed := time.since(begin)

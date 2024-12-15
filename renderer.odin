@@ -192,14 +192,29 @@ font_load :: proc(data: []byte, size: f32) -> (font: ^Font, err: mem.Allocator_E
 	scale := stbtt.ScaleForMappingEmToPixels(&font.info, size)
 	font.height = i32(f32(ascent - descent + linegap) * scale + 0.5)
 
-	// Prevent tab and linefeed from being shown as corrupted chars
-	// g := get
+	// Prevent tab and linefeed from being shown as corrupted chars by making them zero-width
+	set, g_err := glyphset_get(font, '\n')
+	assert(g_err == nil)
+
+	set.chars['\n'].x1 = set.chars['\n'].x0
+	set.chars['\t'].x1 = set.chars['\t'].x0
 
 	return
 }
 
+font_unload :: proc(font: ^Font){
+	for &set in font.sets {
+		if set != nil {
+			image_destroy(&set.bitmap)
+			free(set)
+			set = nil
+		}
+	}
+	free(font)
+}
+
 glyphset_get :: proc(font: ^Font, codepoint: rune) -> (set: ^Glyph_Set, err: mem.Allocator_Error){
-	pos: i32 = (i32(codepoint) % GLYPHS_PER_SET) % MAX_GLYPH_SETS
+	pos: i32 = (i32(codepoint) / GLYPHS_PER_SET) % MAX_GLYPH_SETS
 	if font.sets[pos] == nil {
 		font.sets[pos] = glyphset_load(font, pos) or_return
 	}
@@ -257,7 +272,6 @@ glyphset_load :: proc(font: ^Font, index: i32) -> (set: ^Glyph_Set, err: mem.All
 	}
 
 	// Convert fro 8bit grayscale to 32bit RGBA
-	// pixels_raw := (transmute([^]u8)set.bitmap.pixels)
 
 	gray_pixels := (transmute([^]u8)raw_data(set.bitmap.pixels))[:len(set.bitmap.pixels) * size_of(Color)]
 

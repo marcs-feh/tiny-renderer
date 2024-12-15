@@ -22,12 +22,14 @@ import "core:image"
 import "core:image/png"
 
 pepis :: #load("pepis.png", []byte)
+iosevka :: #load("Iosevka-Regular.ttf", []byte)
 
 test_image : Image
 
 loadimg :: proc(){
 	i, err := image.load_from_bytes(pepis)
 	assert(err == nil, "shiet")
+	defer image.destroy(i)
 	// test_image = i^
 
 	test_image.w = auto_cast i.width
@@ -46,8 +48,21 @@ loadimg :: proc(){
 	}
 }
 
+
 main :: proc(){
+	when ODIN_DEBUG {
+		tracker : mem.Tracking_Allocator
+		mem.tracking_allocator_init(&tracker, context.allocator)
+		context.allocator = mem.tracking_allocator(&tracker)
+
+		defer for k, v in tracker.allocation_map {
+			fmt.println(k, v)
+		}
+	}
+
 	loadimg()
+	defer image_destroy(&test_image)
+
 	if sdl.Init({ .VIDEO }) < 0{
 		panic("Could not initialize SDL")
 	}
@@ -70,7 +85,17 @@ main :: proc(){
 	desired_fps :: 60
 	max_time_per_frame := (1000 / desired_fps) * time.Millisecond
 
+	font, f_err := font_load(iosevka, 8)
+	defer font_unload(font)
+
+	assert(f_err == nil)
+
+	for s, i in font.sets {
+		if s != nil do fmt.println(i, "not null")
+	}
+
 	rend, ren_err := renderer_create(window)
+
 	if ren_err != .None {
 		panic("Failed to create renderer")
 	}
@@ -95,8 +120,9 @@ main :: proc(){
 			}
 		}
 
-		draw_image(rend, test_image, mouse_pos.x, mouse_pos.y, Rect{{30, 30}, 250, 250})
-		draw_rect(rend, Rect{pos = mouse_pos, w=250, h=250}, rgba(200, 0, 0, 69))
+		// draw_image(rend, test_image, mouse_pos.x, mouse_pos.y, Rect{{30, 30}, 250, 250})
+		draw_image(rend, font.sets[0].bitmap, mouse_pos.x, mouse_pos.y)
+		// draw_rect(rend, Rect{pos = mouse_pos, w=250, h=250}, rgba(200, 0, 0, 69))
 
 		sdl.UpdateWindowSurface(window)
 		frame_elapsed := time.since(begin)

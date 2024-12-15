@@ -96,6 +96,7 @@ main :: proc(){
 		}
 
 		draw_image(rend, test_image, mouse_pos.x, mouse_pos.y, Rect{{30, 30}, 250, 250})
+		draw_rect(rend, Rect{pos = mouse_pos, w=250, h=250}, rgba(200, 0, 0, 69))
 
 		sdl.UpdateWindowSurface(window)
 		frame_elapsed := time.since(begin)

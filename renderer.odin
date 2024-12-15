@@ -2,11 +2,17 @@ package tinyren
 
 import "base:intrinsics"
 import "core:time"
+import "core:math"
 import "core:slice"
 import "core:mem"
 import "core:fmt"
 import "core:c"
 import sdl "vendor:sdl2"
+import stbtt "vendor:stb/truetype"
+
+GLYPHS_PER_SET :: 256
+
+MAX_GLYPH_SETS :: 256
 
 Color :: distinct [4]u8
 
@@ -31,6 +37,19 @@ Image :: struct {
 	pixels: []Color,
 }
 
+Glyph_Set :: struct {
+	bitmap: Image,
+	chars: [GLYPHS_PER_SET]stbtt.bakedchar,
+}
+
+Font :: struct {
+	data: []byte,
+	info: stbtt.fontinfo,
+	sets: [MAX_GLYPH_SETS]^Glyph_Set,
+	height: i32,
+	size: f32,
+}
+
 Renderer_Error :: enum byte {
 	None = 0,
 	Argument_Error,
@@ -42,15 +61,14 @@ update_surface_rects :: proc(rend: Renderer, rects: []Rect){
 }
 
 draw_pixel :: #force_inline proc "contextless" (rend: Renderer, #any_int x, y: i32, color: Color){
-	surface := _get_surface(rend)
-	pixels := transmute([^]u32)surface.pixels
-	pixels[x + (y * (surface.pitch / 4))] = transmute(u32)color
+	pixels := _get_surface_pixels(rend)
+	pixels[x + (y * rend.width)] = color
 }
 
-@private
-_get_surface :: #force_inline proc "contextless" (rend: Renderer) -> ^sdl.Surface{
-	return sdl.GetWindowSurface(rend.window)
-}
+// @private
+// _get_surface :: #force_inline proc "contextless" (rend: Renderer) -> ^sdl.Surface{
+// 	return sdl.GetWindowSurface(rend.window)
+// }
 
 @private
 _get_surface_pixels :: #force_inline proc "contextless" (rend: Renderer) -> []Color {
@@ -61,16 +79,14 @@ _get_surface_pixels :: #force_inline proc "contextless" (rend: Renderer) -> []Co
 }
 
 draw_clear :: proc(rend: Renderer, color: Color){
-	surface := _get_surface(rend)
-	pixels := (transmute([^]u32)surface.pixels)[0:(surface.pitch / 4) * surface.h]
-	slice.fill(pixels, transmute(u32)color)
+	pixels := _get_surface_pixels(rend)
+	slice.fill(pixels, color)
 }
 
 draw_image :: proc {
 	draw_image_sub,
 	draw_image_whole,
 }
-
 
 draw_image_sub :: proc(rend: Renderer, img: Image, x, y: i32, sub: Rect){
 	sub, x, y := sub, x, y
@@ -116,23 +132,23 @@ draw_rect :: proc(rend: Renderer, rect: Rect, color: Color){
 	x1 := min(rect.x + rect.w, rend.clip.right)
 	y1 := min(rect.y + rect.h, rend.clip.bottom)
 
-	surface := _get_surface(rend)
-	pixels := transmute([^]u32)surface.pixels
+	// surface := _get_surface(rend)
+	pixels := _get_surface_pixels(rend)
 
 	 #no_bounds_check draw: {
 		 if color.a == 0xff {
 			 for y in y0..<y1 {
-				 y_off := (y * (surface.pitch / 4))
+				 y_off := y * rend.width
 				 row := pixels[x0 + y_off:x1 + y_off]
-				 slice.fill(row, transmute(u32)color)
+				 slice.fill(row, color)
 			 }
 		 }
 		 else {
 			 for y in y0..<y1 {
-				 y_off := (y * (surface.pitch / 4))
+				 y_off := y * rend.width
 				 for x in x0..<x1 {
-					 blended := color_blend(transmute(Color)pixels[x + y_off], color)
-					 pixels[x + y_off] = transmute(u32)blended;
+					 blended := color_blend(pixels[x + y_off], color)
+					 pixels[x + y_off] = blended;
 				 }
 			 }
 		 }
@@ -158,6 +174,97 @@ renderer_create :: proc(win: ^sdl.Window) -> (rend: Renderer, err: Renderer_Erro
 		(surface.format.BytesPerPixel == 4)
 
 	if !ok { return {}, .Invalid_Pixel_Format }
+
+	return
+}
+
+font_load :: proc(data: []byte, size: f32) -> (font: ^Font, err: mem.Allocator_Error) {
+	font = new(Font) or_return
+	font.size = size
+	font.data = data
+
+	if !stbtt.InitFont(&font.info, raw_data(font.data), 0){
+		panic("Failed to init font")
+	}
+
+	ascent, descent, linegap : i32
+	stbtt.GetFontVMetrics(&font.info, &ascent, &descent, &linegap)
+	scale := stbtt.ScaleForMappingEmToPixels(&font.info, size)
+	font.height = i32(f32(ascent - descent + linegap) * scale + 0.5)
+
+	// Prevent tab and linefeed from being shown as corrupted chars
+	// g := get
+
+	return
+}
+
+glyphset_get :: proc(font: ^Font, codepoint: rune) -> (set: ^Glyph_Set, err: mem.Allocator_Error){
+	pos: i32 = (i32(codepoint) % GLYPHS_PER_SET) % MAX_GLYPH_SETS
+	if font.sets[pos] == nil {
+		font.sets[pos] = glyphset_load(font, pos) or_return
+	}
+	return font.sets[pos], nil
+}
+
+INITIAL_GLYPHSET_DIMENSIONS :: 128
+
+image_create :: proc(width, height: i32, allocator := context.allocator) -> (img: Image, err: mem.Allocator_Error) {
+	pixels := make([]Color, width * height, allocator) or_return
+	img.pixels = pixels
+	img.w = width
+	img.h = height
+	return
+}
+
+image_destroy :: proc(img: ^Image, allocator := context.allocator){
+	delete(img.pixels, allocator)
+	img.pixels = nil
+}
+
+glyphset_load :: proc(font: ^Font, index: i32) -> (set: ^Glyph_Set, err: mem.Allocator_Error) {
+	width : i32 = INITIAL_GLYPHSET_DIMENSIONS
+	height : i32 = INITIAL_GLYPHSET_DIMENSIONS
+
+	set = new(Glyph_Set) or_return
+	defer if err != nil { free(set) }
+
+	set.bitmap = image_create(width, height) or_return
+	if err != nil { image_destroy(&set.bitmap) }
+
+	// retry:
+	inv_scale := stbtt.ScaleForMappingEmToPixels(&font.info, 1) / stbtt.ScaleForPixelHeight(&font.info, 1)
+
+	result := stbtt.BakeFontBitmap(
+		raw_data(font.data), 0,
+		font.size * inv_scale,
+		transmute([^]u8)raw_data(set.bitmap.pixels),
+		width, height,
+		index * MAX_GLYPH_SETS, GLYPHS_PER_SET,
+		raw_data(set.chars[:]))
+
+	if result < 0 {
+		unimplemented()
+	}
+
+	// Ensure proper yoffset and xadvance's
+	ascent, descent, linegap : i32
+	stbtt.GetFontVMetrics(&font.info, &ascent, &descent, &linegap)
+	scale := stbtt.ScaleForMappingEmToPixels(&font.info, font.size)
+	scaled_ascent := i32(f32(ascent) * scale + 0.5)
+	for &glyph in set.chars {
+		glyph.yoff += f32(scaled_ascent)
+		glyph.xadvance = math.floor(glyph.xadvance)
+	}
+
+	// Convert fro 8bit grayscale to 32bit RGBA
+	// pixels_raw := (transmute([^]u8)set.bitmap.pixels)
+
+	gray_pixels := (transmute([^]u8)raw_data(set.bitmap.pixels))[:len(set.bitmap.pixels) * size_of(Color)]
+
+	for i := (width * height) - 1; i >= 0; i -= 1 {
+		alpha := gray_pixels[i]
+		set.bitmap.pixels[i] = rgba(0xff, 0xff, 0xff, alpha)
+	}
 
 	return
 }
@@ -200,7 +307,7 @@ color_blend :: proc(dst, src: Color) -> Color {
 	return res
 }
 
-// Ensure that our odin style rect is compatible with SDl's rect
+// Ensure that our odin style rect is compatible with SDl's rect SDL_Rect{x, y, w, h: c.int}
 #assert(size_of(Rect) == size_of(sdl.Rect) && align_of(Rect) == align_of(sdl.Rect))
 #assert(offset_of(Rect, pos) == offset_of(sdl.Rect, x))
 #assert(offset_of(Rect, pos) + size_of(i32) == offset_of(sdl.Rect, y))

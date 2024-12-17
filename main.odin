@@ -22,7 +22,7 @@ import "core:image"
 import "core:image/png"
 
 pepis :: #load("pepis.png", []byte)
-iosevka :: #load("Iosevka-Regular.ttf", []byte)
+main_font :: #load("fonts/noto.ttf", []byte)
 
 test_image : Image
 
@@ -85,14 +85,10 @@ main :: proc(){
 	desired_fps :: 60
 	max_time_per_frame := (1000 / desired_fps) * time.Millisecond
 
-	font, f_err := font_load(iosevka, 8)
+	font, f_err := font_load(main_font, 23)
 	defer font_unload(font)
 
 	assert(f_err == nil)
-
-	for s, i in font.sets {
-		if s != nil do fmt.println(i, "not null")
-	}
 
 	rend, ren_err := renderer_create(window)
 
@@ -102,7 +98,7 @@ main :: proc(){
 
 	for {
 		begin := time.now()
-		draw_clear(rend, rgb(20, 20, 20))
+		draw_clear(rend, rgb(60, 60, 60))
 
 		for sdl.PollEvent(&event) {
 			#partial switch event.type {
@@ -120,16 +116,16 @@ main :: proc(){
 			}
 		}
 
-		// draw_image(rend, test_image, mouse_pos.x, mouse_pos.y, Rect{{30, 30}, 250, 250})
-		draw_image(rend, font.sets[0].bitmap, mouse_pos.x, mouse_pos.y)
-		// draw_rect(rend, Rect{pos = mouse_pos, w=250, h=250}, rgba(200, 0, 0, 69))
+		draw_image(rend, test_image, mouse_pos.x, mouse_pos.y, Rect{{30, 30}, 250, 250})
+
+		draw_text(rend, font, "大切な物を protect my balls", mouse_pos.x, mouse_pos.y + 250, rgb(0xf0, 0x50, 0x40))
 
 		sdl.UpdateWindowSurface(window)
 		frame_elapsed := time.since(begin)
 
 		remaining := max_time_per_frame - frame_elapsed
 		if remaining < 0 {
-			fmt.println("FALLING BEHIND")
+			fmt.println("Skipped 1 frame(s)")
 			continue
 		}
 		time.sleep(remaining)

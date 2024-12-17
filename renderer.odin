@@ -65,11 +65,6 @@ draw_pixel :: #force_inline proc "contextless" (rend: Renderer, #any_int x, y: i
 	pixels[x + (y * rend.width)] = color
 }
 
-// @private
-// _get_surface :: #force_inline proc "contextless" (rend: Renderer) -> ^sdl.Surface{
-// 	return sdl.GetWindowSurface(rend.window)
-// }
-
 @private
 _get_surface_pixels :: #force_inline proc "contextless" (rend: Renderer) -> []Color {
 	surf := sdl.GetWindowSurface(rend.window)
@@ -85,10 +80,15 @@ draw_clear :: proc(rend: Renderer, color: Color){
 
 draw_image :: proc {
 	draw_image_sub,
+	draw_image_no_blend,
 	draw_image_whole,
 }
 
-draw_image_sub :: proc(rend: Renderer, img: Image, x, y: i32, sub: Rect){
+draw_image_no_blend :: proc(rend: Renderer, img: Image, x, y: i32, sub: Rect){
+	draw_image_sub(rend, img, x, y, Color{0xff, 0xff, 0xff, 0xff}, sub)
+}
+
+draw_image_sub :: proc(rend: Renderer, img: Image, x, y: i32, blend_color: Color, sub: Rect){
 	sub, x, y := sub, x, y
 
 	pixels := _get_surface_pixels(rend)
@@ -110,7 +110,7 @@ draw_image_sub :: proc(rend: Renderer, img: Image, x, y: i32, sub: Rect){
 	for _ in 0..<sub.h {
 		for _ in 0..<sub.w {
 			// #no_bounds_check \
-			pixels[surf_index] = color_blend(pixels[surf_index], img.pixels[img_index])
+			pixels[surf_index] = color_blend2(pixels[surf_index], img.pixels[img_index], blend_color)
 			img_index += 1
 			surf_index += 1
 		}
@@ -119,8 +119,25 @@ draw_image_sub :: proc(rend: Renderer, img: Image, x, y: i32, sub: Rect){
 	}
 }
 
-draw_image_whole :: proc(rend: Renderer, img: Image, x, y: i32){
-	draw_image_sub(rend, img, x, y, Rect{ pos = {0, 0}, w = img.w, h = img.h })
+draw_image_whole :: proc(rend: Renderer, img: Image, x, y: i32, blend_color: Color){
+	draw_image_sub(rend, img, x, y, blend_color, Rect{ pos = {0, 0}, w = img.w, h = img.h })
+}
+
+draw_text :: proc(rend: Renderer, font: ^Font, text: string, x, y: i32, color: Color){
+	x, y := x, y
+
+	for r in text {
+		set, _ := glyphset_get(font, r)
+		baked_char := set.chars[r % GLYPHS_PER_SET]
+		rect := Rect {
+			x = i32(baked_char.x0),
+			y = i32(baked_char.y0),
+			w = i32(baked_char.x1 - baked_char.x0),
+			h = i32(baked_char.y1 - baked_char.y0),
+		}
+		draw_image(rend, set.bitmap, x + i32(baked_char.xoff), y + i32(baked_char.yoff), color,rect)
+		x += i32(baked_char.xadvance)
+	}
 }
 
 draw_rect :: proc(rend: Renderer, rect: Rect, color: Color){
@@ -214,7 +231,7 @@ font_unload :: proc(font: ^Font){
 }
 
 glyphset_get :: proc(font: ^Font, codepoint: rune) -> (set: ^Glyph_Set, err: mem.Allocator_Error){
-	pos: i32 = (i32(codepoint) / GLYPHS_PER_SET) % MAX_GLYPH_SETS
+	pos: i32 = (i32(codepoint) / MAX_GLYPH_SETS) % GLYPHS_PER_SET
 	if font.sets[pos] == nil {
 		font.sets[pos] = glyphset_load(font, pos) or_return
 	}
@@ -231,6 +248,7 @@ image_create :: proc(width, height: i32, allocator := context.allocator) -> (img
 	return
 }
 
+
 image_destroy :: proc(img: ^Image, allocator := context.allocator){
 	delete(img.pixels, allocator)
 	img.pixels = nil
@@ -243,22 +261,28 @@ glyphset_load :: proc(font: ^Font, index: i32) -> (set: ^Glyph_Set, err: mem.All
 	set = new(Glyph_Set) or_return
 	defer if err != nil { free(set) }
 
-	set.bitmap = image_create(width, height) or_return
-	if err != nil { image_destroy(&set.bitmap) }
 
-	// retry:
-	inv_scale := stbtt.ScaleForMappingEmToPixels(&font.info, 1) / stbtt.ScaleForPixelHeight(&font.info, 1)
+	retry: for {
+		set.bitmap = image_create(width, height) or_return
 
-	result := stbtt.BakeFontBitmap(
-		raw_data(font.data), 0,
-		font.size * inv_scale,
-		transmute([^]u8)raw_data(set.bitmap.pixels),
-		width, height,
-		index * MAX_GLYPH_SETS, GLYPHS_PER_SET,
-		raw_data(set.chars[:]))
+		inv_scale := stbtt.ScaleForMappingEmToPixels(&font.info, 1) / stbtt.ScaleForPixelHeight(&font.info, 1)
 
-	if result < 0 {
-		unimplemented()
+		result := stbtt.BakeFontBitmap(
+			raw_data(font.data), 0,
+			font.size * inv_scale,
+			transmute([^]u8)raw_data(set.bitmap.pixels),
+			width, height,
+			index * MAX_GLYPH_SETS, GLYPHS_PER_SET,
+			raw_data(set.chars[:]))
+
+		if result < 0 {
+			image_destroy(&set.bitmap)
+			width = max(INITIAL_GLYPHSET_DIMENSIONS * 2, (width * 3) / 2)
+			height = max(INITIAL_GLYPHSET_DIMENSIONS * 2, (height * 3) / 2)
+		}
+		else {
+			break
+		}
 	}
 
 	// Ensure proper yoffset and xadvance's
@@ -321,10 +345,25 @@ color_blend :: proc(dst, src: Color) -> Color {
 	return res
 }
 
+color_blend2 :: proc(dst, src, col: Color) -> Color {
+	res := dst
+	ia := u32(0xff - src.a)
+	a  := (u32(src.a) * u32(col.a)) >> 8
+
+	res.r = u8((((u32(src.r) * u32(col.r) * a)) >> 16) + ((u32(dst.r) * ia) >> 8))
+	res.g = u8((((u32(src.g) * u32(col.g) * a)) >> 16) + ((u32(dst.g) * ia) >> 8))
+	res.b = u8((((u32(src.b) * u32(col.b) * a)) >> 16) + ((u32(dst.b) * ia) >> 8))
+	return res
+}
+
 // Ensure that our odin style rect is compatible with SDl's rect SDL_Rect{x, y, w, h: c.int}
 #assert(size_of(Rect) == size_of(sdl.Rect) && align_of(Rect) == align_of(sdl.Rect))
 #assert(offset_of(Rect, pos) == offset_of(sdl.Rect, x))
 #assert(offset_of(Rect, pos) + size_of(i32) == offset_of(sdl.Rect, y))
 #assert(offset_of(Rect, w) == offset_of(sdl.Rect, w))
 #assert(offset_of(Rect, h) == offset_of(sdl.Rect, h))
+
+// Ensure that the glyph indexing will work
+#assert(GLYPHS_PER_SET == 256, "This must be 256")
+#assert((MAX_GLYPH_SETS & (MAX_GLYPH_SETS - 1)) == 0, "MAX_GLYPH_SETS must be a power of 2")
 

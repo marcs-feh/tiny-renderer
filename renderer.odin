@@ -30,6 +30,7 @@ Renderer :: struct {
 	width: i32,
 	height: i32,
 	clip: Clip,
+	cache: Cell_Buffer,
 }
 
 Image :: struct {
@@ -54,16 +55,46 @@ Renderer_Error :: enum byte {
 	None = 0,
 	Argument_Error,
 	Invalid_Pixel_Format,
+	Memory_Error,
+}
+
+Command :: union {
+	Draw_Rect,
+	Draw_Image,
+	Draw_Text,
+	Set_Clip,
+}
+
+Set_Clip :: struct {
+	clip: Rect,
+}
+
+Draw_Image :: struct {
+	image: Image,
+	sub: Rect,
+	blend_color: Color,
+}
+
+Draw_Rect :: struct {
+	rect: Rect,
+	color: Color,
+}
+
+Draw_Text :: struct {
+	text: string,
+	font: ^Font,
+	pos: [2]i32,
+	color: Color,
 }
 
 update_surface_rects :: proc(rend: Renderer, rects: []Rect){
 	sdl.UpdateWindowSurfaceRects(rend.window, transmute([^]sdl.Rect)raw_data(rects), auto_cast len(rects))
 }
 
-draw_pixel :: #force_inline proc "contextless" (rend: Renderer, #any_int x, y: i32, color: Color){
-	pixels := _get_surface_pixels(rend)
-	pixels[x + (y * rend.width)] = color
-}
+// draw_pixel :: #force_inline proc "contextless" (rend: Renderer, #any_int x, y: i32, color: Color){
+// 	pixels := _get_surface_pixels(rend)
+// 	pixels[x + (y * rend.width)] = color
+// }
 
 @private
 _get_surface_pixels :: #force_inline proc "contextless" (rend: Renderer) -> []Color {
@@ -109,8 +140,7 @@ draw_image_sub :: proc(rend: Renderer, img: Image, x, y: i32, blend_color: Color
 
 	for _ in 0..<sub.h {
 		for _ in 0..<sub.w {
-			// #no_bounds_check \
-			pixels[surf_index] = color_blend2(pixels[surf_index], img.pixels[img_index], blend_color)
+			#no_bounds_check pixels[surf_index] = color_blend2(pixels[surf_index], img.pixels[img_index], blend_color)
 			img_index += 1
 			surf_index += 1
 		}
@@ -149,7 +179,6 @@ draw_rect :: proc(rend: Renderer, rect: Rect, color: Color){
 	x1 := min(rect.x + rect.w, rend.clip.right)
 	y1 := min(rect.y + rect.h, rend.clip.bottom)
 
-	// surface := _get_surface(rend)
 	pixels := _get_surface_pixels(rend)
 
 	 #no_bounds_check draw: {
@@ -172,7 +201,7 @@ draw_rect :: proc(rend: Renderer, rect: Rect, color: Color){
 	}
 }
 
-renderer_create :: proc(win: ^sdl.Window) -> (rend: Renderer, err: Renderer_Error) {
+renderer_create :: proc(win: ^sdl.Window, allocator := context.allocator) -> (rend: Renderer, err: Renderer_Error) {
 	if win == nil { return {}, .None }
 
 	rend.window = win
@@ -185,6 +214,11 @@ renderer_create :: proc(win: ^sdl.Window) -> (rend: Renderer, err: Renderer_Erro
 		rend.height = i32(h)
 		rend.clip = { top = 0, bottom = rend.height, left = 0, right = rend.width }
 	}
+	cache, mem_err := cell_buffer_create(allocator)
+	if mem_err != nil {
+		return rend, .Memory_Error
+	}
+	rend.cache = cache
 
 	ok := ((sdl.PixelFormatEnum(surface.format.format) == .RGB888) ||
 			(sdl.PixelFormatEnum(surface.format.format) ==.RGBA8888)) &&
@@ -238,7 +272,6 @@ glyphset_get :: proc(font: ^Font, codepoint: rune) -> (set: ^Glyph_Set, err: mem
 	return font.sets[pos], nil
 }
 
-INITIAL_GLYPHSET_DIMENSIONS :: 128
 
 image_create :: proc(width, height: i32, allocator := context.allocator) -> (img: Image, err: mem.Allocator_Error) {
 	pixels := make([]Color, width * height, allocator) or_return
@@ -255,6 +288,8 @@ image_destroy :: proc(img: ^Image, allocator := context.allocator){
 }
 
 glyphset_load :: proc(font: ^Font, index: i32) -> (set: ^Glyph_Set, err: mem.Allocator_Error) {
+	INITIAL_GLYPHSET_DIMENSIONS :: 128
+
 	width : i32 = INITIAL_GLYPHSET_DIMENSIONS
 	height : i32 = INITIAL_GLYPHSET_DIMENSIONS
 
@@ -296,7 +331,6 @@ glyphset_load :: proc(font: ^Font, index: i32) -> (set: ^Glyph_Set, err: mem.All
 	}
 
 	// Convert fro 8bit grayscale to 32bit RGBA
-
 	gray_pixels := (transmute([^]u8)raw_data(set.bitmap.pixels))[:len(set.bitmap.pixels) * size_of(Color)]
 
 	for i := (width * height) - 1; i >= 0; i -= 1 {
